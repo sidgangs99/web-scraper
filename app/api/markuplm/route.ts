@@ -1,3 +1,5 @@
+import OpenAI from "openai"
+
 type Answer = {
   answer: string
   confidence: number
@@ -12,7 +14,9 @@ type CachedResponse = {
 }
 
 // In-memory cache scoped to this server process.
+const apiKey = process.env.HUGGINGFACE_API_KEY
 const promptResponseCache = new Map<string, CachedResponse>()
+const openai = new OpenAI({ apiKey })
 
 function createCacheKey(url: string, question: string) {
   return `${url.trim().toLowerCase()}::${question.trim().toLowerCase()}`
@@ -22,12 +26,77 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function sanitizeJsonResponse(raw: string) {
+  const withoutFences = raw
+    .replace(/```[a-zA-Z0-9_-]*/g, "")
+    .replace(/```/g, "")
+    .trim()
+
+  const firstArrayStart = withoutFences.indexOf("[")
+  const firstObjectStart = withoutFences.indexOf("{")
+
+  let start = -1
+  let opening = ""
+  let closing = ""
+
+  if (firstArrayStart === -1 && firstObjectStart === -1) {
+    return withoutFences
+  }
+
+  if (
+    firstArrayStart !== -1 &&
+    (firstObjectStart === -1 || firstArrayStart < firstObjectStart)
+  ) {
+    start = firstArrayStart
+    opening = "["
+    closing = "]"
+  } else {
+    start = firstObjectStart
+    opening = "{"
+    closing = "}"
+  }
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let i = start; i < withoutFences.length; i += 1) {
+    const char = withoutFences[i]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === "\\") {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === opening) {
+      depth += 1
+    } else if (char === closing) {
+      depth -= 1
+      if (depth === 0) {
+        return withoutFences.slice(start, i + 1).trim()
+      }
+    }
+  }
+
+  return withoutFences.slice(start).trim()
+}
+
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.HUGGINGFACE_API_KEY
     if (!apiKey) {
       return Response.json(
-        { detail: "HuggingFace API key is required." },
+        { detail: "OPENAI_API_KEY is required." },
         { status: 400 }
       )
     }
@@ -79,7 +148,8 @@ URL: ${url}
 Question: ${question}
 
 If you output anything other than valid JSON, the response is invalid.
-Output:
+Output only JSON format:
+\`\`\`json
 [
   {
     "answer": "short precise answer",
@@ -89,19 +159,14 @@ Output:
   },
   ...,
 ]
+\`\`\`
 `
 
     const openAIRequestStartedAt = Date.now()
-    const openAIResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        input: prompt,
-      }),
+    const openAIResponse = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: prompt,
+      tools: [{ type: "web_search_preview" }],
     })
     const openAIElapsedMs = Date.now() - openAIRequestStartedAt
     const minResponseTimeMs = 8000
@@ -109,38 +174,15 @@ Output:
       await sleep(minResponseTimeMs - openAIElapsedMs + Math.floor(Math.random() * 10001))
     }
 
-    const openAIRawBody = await openAIResponse.text()
-    if (!openAIResponse.ok) {
-      return Response.json(
-        {
-          question,
-          url,
-          answers: [],
-        },
-        { status: 502 }
-      )
-    }
-
-    let data: any
-    try {
-      data = JSON.parse(openAIRawBody)
-    } catch {
-      return Response.json(
-        {
-          question,
-          url,
-          answers: [],
-        },
-        { status: 502 }
-      )
-    }
+    const firstOutputItem = openAIResponse.output?.[0] as
+      | { content?: Array<{ text?: string }> }
+      | undefined
     const answers =
-      data?.output_text ||
-      data?.output?.[0]?.content?.[0]?.text ||
-      "No answer found."
+      openAIResponse.output_text ||
+      firstOutputItem?.content?.[0]?.text ||
+      "[]"
 
-    console.log(answers)
-    const parsedAnswers = JSON.parse(answers) as Answer[]
+    const parsedAnswers = JSON.parse(sanitizeJsonResponse(answers)) as Answer[]
     parsedAnswers.sort((a: Answer, b: Answer) => b.confidence - a.confidence)
 
     const responsePayload: CachedResponse = {
@@ -153,6 +195,7 @@ Output:
 
     return Response.json(responsePayload)
   } catch (error: any) {
+    console.log(error)
     return Response.json(
       { detail: error?.message || "Unexpected server error." },
       { status: 500 }

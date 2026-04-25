@@ -11868,6 +11868,11 @@ open@^8.0.4, open@^8.4.0:
     is-docker "^2.1.1"
     is-wsl "^2.2.0"
 
+openai@^6.34.0:
+  version "6.34.0"
+  resolved "https://registry.yarnpkg.com/openai/-/openai-6.34.0.tgz#93483a1044e2dcd62891bba580772b9cb792395d"
+  integrity sha512-yEr2jdGf4tVFYG6ohmr3pF6VJuveP0EA/sS8TBx+4Eq5NT10alu5zg2dmxMXMgqpihRDQlFGpRt2XwsGj+Fyxw==
+
 opener@^1.5.2:
   version "1.5.2"
   resolved "https://registry.yarnpkg.com/opener/-/opener-1.5.2.tgz#5d37e1f35077b9dcac4301372271afdeb2a13598"
