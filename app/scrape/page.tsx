@@ -35,11 +35,10 @@ export default function Scraper() {
     setResult(null)
 
     try {
-        console.log("Fetching...")
-      const res = await axios.post("https://web-scraping-markuplm-production.up.railway.app/query", {
+      console.log("Fetching...")
+      const res = await axios.post("/api/markuplm", {
         url,
         question,
-        min_confidence: 0.1,
       })
 
       setResult(res.data)
